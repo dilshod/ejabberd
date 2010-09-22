@@ -150,6 +150,8 @@ init([From, Server, Type]) ->
     TLS = case ejabberd_config:get_local_option(s2s_use_starttls) of
 	      undefined ->
 		  false;
+	      mandatory ->
+	          true;
 	      UseStartTLS ->
 		  UseStartTLS
 	  end,

@@ -61,6 +61,7 @@
 		streamid,
 		shaper,
 		tls = false,
+		tls_required = false,
 		tls_enabled = false,
 		tls_options = [],
 		authenticated = false,
@@ -122,11 +123,13 @@ init([{SockMod, Socket}, Opts]) ->
 		 {value, {_, S}} -> S;
 		 _ -> none
 	     end,
-    StartTLS = case ejabberd_config:get_local_option(s2s_use_starttls) of
+    {StartTLS, TLSRequired} = case ejabberd_config:get_local_option(s2s_use_starttls) of
 		   undefined ->
-		       false;
+		       {false, false};
+		   mandatory ->
+		       {true, true};
 		   UseStartTLS ->
-		       UseStartTLS
+		       {UseStartTLS, false}
 	       end,
     TLSOpts = case ejabberd_config:get_local_option(s2s_certfile) of
 		  undefined ->
@@ -141,6 +144,7 @@ init([{SockMod, Socket}, Opts]) ->
 	    streamid = new_id(),
 	    shaper = Shaper,
 	    tls = StartTLS,
+	    tls_required = TLSRequired,
 	    tls_enabled = false,
 	    tls_options = TLSOpts,
 	    timer = Timer}}.
@@ -187,7 +191,7 @@ wait_for_stream({xmlstreamstart, Opening}, StateData) ->
 			   StateData#state.tls_enabled ->
 			       [];
 			   true ->
-			       [exmpp_server_tls:feature()]
+			       [exmpp_server_tls:feature(StateData#state.tls_required)]
 		       end,
 	    Features = SASL ++ StartTLS ++ ejabberd_hooks:run_fold(
 					     c2s_stream_features,
@@ -327,6 +331,22 @@ wait_for_feature_request({xmlstreamerror, _}, StateData) ->
 wait_for_feature_request(closed, StateData) ->
     {stop, normal, StateData}.
 
+
+stream_established({xmlstreamelement, Opening}, StateData) when not StateData#state.tls_enabled and StateData#state.tls_required ->
+    DefaultLang = case ?MYLANG of
+      undefined ->
+	  "en";
+      DL ->
+	  DL
+    end,
+    Header = exmpp_stream:opening_reply(Opening,
+      StateData#state.streamid, DefaultLang),
+    send_element(StateData,
+      exmpp_xml:append_child(Header,
+	exmpp_stream:error('policy-violation',
+	  {"en", "Use of STARTTLS required"}))),
+    send_element(StateData, exmpp_stream:closing()),
+    {stop, normal, StateData};
 
 stream_established({xmlstreamelement, El}, StateData) ->
     cancel_timer(StateData#state.timer),
@@ -531,6 +551,7 @@ handle_sync_event(get_state_infos, _From, StateName, StateData) ->
 	     {port, Port},
 	     {streamid, StateData#state.streamid},
 	     {tls, StateData#state.tls},
+	     {tls_required, StateData#state.tls_required},
 	     {tls_enabled, StateData#state.tls_enabled},
 	     {tls_options, StateData#state.tls_options},
 	     {authenticated, StateData#state.authenticated},
